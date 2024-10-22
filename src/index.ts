@@ -56,7 +56,11 @@ const EVENTS_QUERY = gql`
       limit: $limit
       orderBy: "eventTime"
       orderDirection: "desc"
-      where: { eventTime_gt: $timestamp }
+      where: { eventTime_gt: $timestamp,
+        OR: [
+          { eventType: "RevealBattle" },
+          { eventType: "AttackVillage" }
+        ] }
     ) {
       items {
         id
