@@ -8,72 +8,78 @@ import Redis from 'ioredis';
 config();
 
 if (!process.env.REDIS_URL) {
-  console.error('Please provide REDIS_URL in environment variables');
+  console.error('Please provide a REDIS_URL environment variable');
   process.exit(1);
 }
 
 // Redis setup
 const redis = new Redis(process.env.REDIS_URL);
 
-// Type definitions
+// Types
 interface Player {
   username: string;
   displayName: string;
 }
 
-interface BaseEvent {
-  id: string;
-  eventType: string;
-  eventTime: string;
-  description: string;
-  player: Player;
-}
-
-interface GatherFoodEvent extends BaseEvent {
-  foodAdded: number;
-  numVillagers: number;
-}
-
-interface BuildHutEvent extends BaseEvent {
-  hutsAdded: number;
-}
-
-interface ChopWoodEvent extends BaseEvent {
-  woodAdded: number;
-  numVillagers: number;
-}
-
-interface CommitDefenseEvent extends BaseEvent {
-  timeCommittedDefense: string;
-}
-
-interface AttackVillageEvent extends BaseEvent {
-  resourceToSteal: number;
-  defenderPlayer: Player;
-}
-
-interface RevealBattleEvent extends BaseEvent {
-  winnerVillageIds: string;
-  resourcesExchanged: string;
-  amountResourcesExchanged: string;
-  attackerPlayer: Player;
-  defenderPlayer: Player;
-}
-
-type Event =
-  | GatherFoodEvent
-  | BuildHutEvent
-  | ChopWoodEvent
-  | CommitDefenseEvent
-  | AttackVillageEvent
-  | RevealBattleEvent;
-
 interface EventsResponse {
-  events: Event[];
+  gatherFoods: {
+    items: Array<{
+      id: string;
+      timeGatherFood: string;
+      foodAdded: number;
+      numVillagers: number;
+      player: Player;
+    }>;
+  };
+  chopWoods: {
+    items: Array<{
+      id: string;
+      timeChopWood: string;
+      woodAdded: number;
+      numVillagers: number;
+      player: Player;
+    }>;
+  };
+  buildHuts: {
+    items: Array<{
+      id: string;
+      timeBuildHut: string;
+      hutsAdded: number;
+      player: Player;
+    }>;
+  };
+  commitDefenses: {
+    items: Array<{
+      id: string;
+      timeCommittedDefense: string;
+      player: Player;
+    }>;
+  };
+  attackVillages: {
+    items: Array<{
+      id: string;
+      timeAttackedVillage: string;
+      resourceToSteal: number;
+      attackerPlayer: Player;
+      defenderPlayer: Player;
+    }>;
+  };
+  revealBattles: {
+    items: Array<{
+      id: string;
+      timeRevealed: string;
+      winnerVillageIds: string;
+      resourcesExchanged: string;
+      amountResourcesExchanged: string;
+      attackerPlayer: Player;
+      defenderPlayer: Player;
+    }>;
+  };
 }
 
 // Constants
 const LAST_PROCESSED_KEY = 'stokefire:last_processed_timestamp';
+const BATCH_SIZE = 25;
 
 // GraphQL client setup
 const graphqlClient = new GraphQLClient('https://api.stokefire.xyz/graphql');
@@ -82,44 +88,103 @@ const graphqlClient = new GraphQLClient('https://api.stokefire.xyz/graphql');
 const NEYNAR_API_KEY = process.env.NEYNAR_API_KEY;
 const NEYNAR_API_URL = 'https://api.neynar.com/v2/farcaster/cast';
 
-// GraphQL query for events after a specific timestamp
+// GraphQL query
 const EVENTS_QUERY = gql`
-  query GetEvents($timestamp: BigInt!) {
-    events(
-      orderBy: eventTime
-      orderDirection: asc
-      where: { eventTime_gt: $timestamp }
+  query GetEvents($timestamp: BigInt!, $limit: Int!) {
+    gatherFoods(
+      limit: $limit
+      orderBy: "timeGatherFood"
+      orderDirection: "desc"
+      where: { timeGatherFood_gt: $timestamp }
     ) {
-      id
-      eventType
-      eventTime
-      description
-      player {
-        username
-        displayName
-      }
-      ... on GatherFood {
+      items {
+        id
+        timeGatherFood
         foodAdded
         numVillagers
+        player {
+          username
+          displayName
+        }
       }
-      ... on BuildHut {
-        hutsAdded
-      }
-      ... on ChopWood {
+    }
+    chopWoods(
+      limit: $limit
+      orderBy: "timeChopWood"
+      orderDirection: "desc"
+      where: { timeChopWood_gt: $timestamp }
+    ) {
+      items {
+        id
+        timeChopWood
         woodAdded
         numVillagers
+        player {
+          username
+          displayName
+        }
       }
-      ... on CommitDefense {
+    }
+    buildHuts(
+      limit: $limit
+      orderBy: "timeBuildHut"
+      orderDirection: "desc"
+      where: { timeBuildHut_gt: $timestamp }
+    ) {
+      items {
+        id
+        timeBuildHut
+        hutsAdded
+        player {
+          username
+          displayName
+        }
+      }
+    }
+    commitDefenses(
+      limit: $limit
+      orderBy: "timeCommittedDefense"
+      orderDirection: "desc"
+      where: { timeCommittedDefense_gt: $timestamp }
+    ) {
+      items {
+        id
         timeCommittedDefense
+        player {
+          username
+          displayName
+        }
       }
-      ... on AttackVillage {
+    }
+    attackVillages(
+      limit: $limit
+      orderBy: "timeAttackedVillage"
+      orderDirection: "desc"
+      where: { timeAttackedVillage_gt: $timestamp }
+    ) {
+      items {
+        id
+        timeAttackedVillage
         resourceToSteal
+        attackerPlayer {
+          username
+          displayName
+        }
         defenderPlayer {
           username
           displayName
         }
       }
-      ... on RevealBattle {
+    }
+    revealBattles(
+      limit: $limit
+      orderBy: "timeRevealed"
+      orderDirection: "desc"
+      where: { timeRevealed_gt: $timestamp }
+    ) {
+      items {
+        id
+        timeRevealed
         winnerVillageIds
         resourcesExchanged
         amountResourcesExchanged
@@ -165,66 +230,111 @@ function formatTimeDifference(timestamp: string): string {
   return `${hours} hour${hours > 1 ? 's' : ''} ago`;
 }
 
-// Type guard functions
-function isGatherFoodEvent(event: Event): event is GatherFoodEvent {
-  return event.eventType === 'GATHER_FOOD';
+// Function to normalize events from different types into a common format
+function normalizeEvents(response: EventsResponse): Array<{ id: string, timestamp: string, type: string, data: any }> {
+  const events = [];
+
+  if (response.gatherFoods?.items) {
+    events.push(...response.gatherFoods.items.map(item => ({
+      id: item.id,
+      timestamp: item.timeGatherFood,
+      type: 'GATHER_FOOD',
+      data: item
+    })));
+  }
+
+  if (response.chopWoods?.items) {
+    events.push(...response.chopWoods.items.map(item => ({
+      id: item.id,
+      timestamp: item.timeChopWood,
+      type: 'CHOP_WOOD',
+      data: item
+    })));
+  }
+
+  if (response.buildHuts?.items) {
+    events.push(...response.buildHuts.items.map(item => ({
+      id: item.id,
+      timestamp: item.timeBuildHut,
+      type: 'BUILD_HUT',
+      data: item
+    })));
+  }
+
+  if (response.commitDefenses?.items) {
+    events.push(...response.commitDefenses.items.map(item => ({
+      id: item.id,
+      timestamp: item.timeCommittedDefense,
+      type: 'COMMIT_DEFENSE',
+      data: item
+    })));
+  }
+
+  if (response.attackVillages?.items) {
+    events.push(...response.attackVillages.items.map(item => ({
+      id: item.id,
+      timestamp: item.timeAttackedVillage,
+      type: 'ATTACK_VILLAGE',
+      data: item
+    })));
+  }
+
+  if (response.revealBattles?.items) {
+    events.push(...response.revealBattles.items.map(item => ({
+      id: item.id,
+      timestamp: item.timeRevealed,
+      type: 'REVEAL_BATTLE',
+      data: item
+    })));
+  }
+
+  // Sort by timestamp descending (latest first)
+  return events.sort((a, b) => Number(b.timestamp) - Number(a.timestamp));
 }
 
-function isBuildHutEvent(event: Event): event is BuildHutEvent {
-  return event.eventType === 'BUILD_HUT';
-}
+// Format event message
+function formatEventMessage(event: { type: string; data: any; timestamp: string }): string {
+  const time = formatTimeDifference(event.timestamp);
+  const username = `@${event.data.player?.username || event.data.attackerPlayer?.username}`;
 
-function isChopWoodEvent(event: Event): event is ChopWoodEvent {
-  return event.eventType === 'CHOP_WOOD';
-}
+  switch (event.type) {
+    case 'GATHER_FOOD':
+      return `${username} gathered ${event.data.foodAdded} food with ${event.data.numVillagers} villagers ${time}`;
 
-function isAttackVillageEvent(event: Event): event is AttackVillageEvent {
-  return event.eventType === 'ATTACK_VILLAGE';
-}
+    case 'BUILD_HUT':
+      return `${username} built ${event.data.hutsAdded} hut${event.data.hutsAdded > 1 ? 's' : ''} ${time}`;
 
-function isRevealBattleEvent(event: Event): event is RevealBattleEvent {
-  return event.eventType === 'REVEAL_BATTLE';
-}
+    case 'CHOP_WOOD':
+      return `${username} gathered ${event.data.woodAdded} wood with ${event.data.numVillagers} villagers ${time}`;
 
-// Format event message based on type
-function formatEventMessage(event: Event): string {
-  const time = formatTimeDifference(event.eventTime);
-  const username = `@${event.player.username}`;
+    case 'COMMIT_DEFENSE':
+      return `${username} committed their defense ${time}`;
 
-  if (isGatherFoodEvent(event)) {
-    return `${username} gathered ${event.foodAdded} food with ${event.numVillagers} villagers ${time}`;
+    case 'ATTACK_VILLAGE':
+      return `${username} raided @${event.data.defenderPlayer.username}'s village, tried to steal ${event.data.resourceToSteal} resources ${time}`;
+
+    case 'REVEAL_BATTLE': {
+      const isAttackerWinner = event.data.winnerVillageIds.includes(event.data.attackerPlayer.username);
+      const winner = isAttackerWinner ? event.data.attackerPlayer.username : event.data.defenderPlayer.username;
+      return `${username} revealed battle. @${winner} won ${event.data.amountResourcesExchanged} ${event.data.resourcesExchanged} ${time}`;
+    }
+
+    default:
+      return `${username} performed an action ${time}`;
   }
-
-  if (isBuildHutEvent(event)) {
-    return `${username} built ${event.hutsAdded} hut${event.hutsAdded > 1 ? 's' : ''} ${time}`;
-  }
-
-  if (isChopWoodEvent(event)) {
-    return `${username} gathered ${event.woodAdded} wood with ${event.numVillagers} villagers ${time}`;
-  }
-
-  if (event.eventType === 'COMMIT_DEFENSE') {
-    return `${username} committed their defense ${time}`;
-  }
-
-  if (isAttackVillageEvent(event)) {
-    return `${username} raided @${event.defenderPlayer.username}'s village, tried to steal ${event.resourceToSteal} resources ${time}`;
-  }
-
-  if (isRevealBattleEvent(event)) {
-    const isAttackerWinner = event.winnerVillageIds.includes(event.attackerPlayer.username);
-    const winner = isAttackerWinner ? event.attackerPlayer.username : event.defenderPlayer.username;
-    return `${username} revealed battle. @${winner} won ${event.amountResourcesExchanged} ${event.resourcesExchanged} ${time}`;
-  }
-
-  return `${username} ${event.description} ${time}`;
 }
 
 // Post to Farcaster using Neynar API
 async function postToFarcaster(message: string) {
   try {
-    await axios.post(NEYNAR_API_URL,
-      { text: message },
+    if (!process.env.NEYNAR_SIGNER_UUID) {
+      throw new Error('Please provide a NEYNAR_SIGNER_UUID environment variable');
+    }
+    const request = await axios.post(NEYNAR_API_URL,
+      {
+        signer_uuid: process.env.NEYNAR_SIGNER_UUID,
+        text: message
+      },
       {
         headers: {
           'accept': 'application/json',
@@ -233,6 +343,10 @@ async function postToFarcaster(message: string) {
         }
       }
     );
+
+    if (request.status !== 200) {
+      throw new Error(`Failed to post to Farcaster: ${request.data}`);
+    }
     console.log('Successfully posted to Farcaster:', message);
   } catch (error) {
     console.error('Error posting to Farcaster:', error);
@@ -246,24 +360,28 @@ async function processEvents() {
     console.log(`Fetching events after timestamp ${lastTimestamp}`);
 
     const response = await graphqlClient.request<EventsResponse>(EVENTS_QUERY, {
-      timestamp: lastTimestamp
+      timestamp: lastTimestamp,
+      limit: BATCH_SIZE
     });
 
-    if (response.events?.length > 0) {
-      // Sort events by timestamp to ensure chronological order
-      const sortedEvents = response.events.sort((a, b) =>
-        Number(a.eventTime) - Number(b.eventTime)
-      );
+    const normalizedEvents = normalizeEvents(response);
 
-      for (const event of sortedEvents) {
+    if (normalizedEvents.length > 0) {
+      // Process events from oldest to newest
+      const eventsToProcess = [...normalizedEvents].reverse();
+
+      for (const event of eventsToProcess) {
         const message = formatEventMessage(event);
         await postToFarcaster(message);
-        await updateLastProcessedTimestamp(event.eventTime);
-        console.log(`Posted event from ${event.eventTime}`);
+        await updateLastProcessedTimestamp(event.timestamp);
+        console.log(`Posted event from ${event.timestamp}`);
       }
     }
   } catch (error) {
     console.error('Error processing events:', error);
+    if (error instanceof Error) {
+      console.error('Error details:', error.message);
+    }
   }
 }
 
