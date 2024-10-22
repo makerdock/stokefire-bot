@@ -1,7 +1,7 @@
-import { GraphQLClient } from 'graphql-request';
-import { config } from 'dotenv';
-import { gql } from 'graphql-tag';
 import axios from 'axios';
+import { config } from 'dotenv';
+import { GraphQLClient } from 'graphql-request';
+import { gql } from 'graphql-tag';
 import Redis from 'ioredis';
 
 // Load environment variables
@@ -40,7 +40,7 @@ interface EventsResponse {
 
 // Constants
 const LAST_PROCESSED_KEY = 'stokefire:last_processed_timestamp';
-const BATCH_SIZE = 100;
+const BATCH_SIZE = 2;
 
 // GraphQL client setup
 const graphqlClient = new GraphQLClient('https://api.stokefire.xyz/graphql');
@@ -51,112 +51,26 @@ const NEYNAR_API_URL = 'https://api.neynar.com/v2/farcaster/cast';
 
 // GraphQL query
 const EVENTS_QUERY = gql`
-  query GetEvents($timestamp: BigInt!, $limit: Int!) {
-    gatherFoods(
+   query GetEvents($timestamp: BigInt!, $limit: Int!) {
+    events(
       limit: $limit
-      orderBy: "timeGatherFood"
+      orderBy: "eventTime"
       orderDirection: "desc"
-      where: { timeGatherFood_gt: $timestamp }
+      where: { eventTime_gt: $timestamp }
     ) {
       items {
         id
-        timeGatherFood
-        foodAdded
-        numVillagers
+        eventTime
+        eventType
+        description
         player {
           username
           displayName
-        }
+        }       
       }
-    }
-    chopWoods(
-      limit: $limit
-      orderBy: "timeChopWood"
-      orderDirection: "desc"
-      where: { timeChopWood_gt: $timestamp }
-    ) {
-      items {
-        id
-        timeChopWood
-        woodAdded
-        numVillagers
-        player {
-          username
-          displayName
-        }
-      }
-    }
-    buildHuts(
-      limit: $limit
-      orderBy: "timeBuildHut"
-      orderDirection: "desc"
-      where: { timeBuildHut_gt: $timestamp }
-    ) {
-      items {
-        id
-        timeBuildHut
-        hutsAdded
-        player {
-          username
-          displayName
-        }
-      }
-    }
-    commitDefenses(
-      limit: $limit
-      orderBy: "timeCommittedDefense"
-      orderDirection: "desc"
-      where: { timeCommittedDefense_gt: $timestamp }
-    ) {
-      items {
-        id
-        timeCommittedDefense
-        player {
-          username
-          displayName
-        }
-      }
-    }
-    attackVillages(
-      limit: $limit
-      orderBy: "timeAttackedVillage"
-      orderDirection: "desc"
-      where: { timeAttackedVillage_gt: $timestamp }
-    ) {
-      items {
-        id
-        timeAttackedVillage
-        resourceToSteal
-        attackerPlayer {
-          username
-          displayName
-        }
-        defenderPlayer {
-          username
-          displayName
-        }
-      }
-    }
-    revealBattles(
-      limit: $limit
-      orderBy: "timeRevealed"
-      orderDirection: "desc"
-      where: { timeRevealed_gt: $timestamp }
-    ) {
-      items {
-        id
-        timeRevealed
-        winnerVillageIds
-        resourcesExchanged
-        amountResourcesExchanged
-        attackerPlayer {
-          username
-          displayName
-        }
-        defenderPlayer {
-          username
-          displayName
-        }
+      pageInfo {
+        hasNextPage
+        endCursor
       }
     }
   }
@@ -187,12 +101,14 @@ function formatEventMessage(event: Event): string {
 }
 
 // Post to Farcaster using Neynar API
+// Post to Farcaster using Neynar API
 async function postToFarcaster(message: string) {
   try {
     if (!process.env.NEYNAR_SIGNER_UUID) {
-      throw new Error('Please provide a NEYNAR_SIGNER_UUID environment variable');
+      console.error('Please provide a NEYNAR_SIGNER_UUID environment variable');
+      return;
     }
-    const request = await axios.post(NEYNAR_API_URL,
+    const response = await axios.post(NEYNAR_API_URL,
       {
         signer_uuid: process.env.NEYNAR_SIGNER_UUID,
         text: message
@@ -206,10 +122,13 @@ async function postToFarcaster(message: string) {
       }
     );
 
-    if (request.status !== 200) {
-      throw new Error(`Failed to post to Farcaster: ${request.data}`);
+    if (response.status !== 200) {
+      console.log("🚀 ~ postToFarcaster ~ data:", JSON.stringify(response.data))
+      throw new Error(`HTTP error! status: ${response.status}`);
     }
+
     console.log('Successfully posted to Farcaster:', message);
+    return response.data;
   } catch (error) {
     console.error('Error posting to Farcaster:', error);
   }
