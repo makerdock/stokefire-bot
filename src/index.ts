@@ -79,7 +79,7 @@ interface EventsResponse {
 
 // Constants
 const LAST_PROCESSED_KEY = 'stokefire:last_processed_timestamp';
-const BATCH_SIZE = 25;
+const BATCH_SIZE = 100;
 
 // GraphQL client setup
 const graphqlClient = new GraphQLClient('https://api.stokefire.xyz/graphql');
