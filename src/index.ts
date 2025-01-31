@@ -152,7 +152,6 @@ async function postToFarcaster(message: string) {
         const hash = await getOldestCastHash();
         if (hash) {
           await deleteCast(hash);
-          console.log("deleted cast");
         }
       }
 
@@ -191,10 +190,10 @@ async function deleteCast(hash: string) {
       throw new Error(`HTTP error! status: ${response.status}`);
     }
 
-    console.log("Successfully deleted old cast");
+    console.log("Successfully deleted old cast", hash);
     return response.data;
   } catch (error) {
-    console.error("Error posting to Farcaster:", error);
+    console.error("Error deleting cast:", error);
   }
 }
 
