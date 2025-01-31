@@ -148,15 +148,15 @@ async function postToFarcaster(message: string) {
       const castHashesCount = await redis.llen(CAST_HASHES_KEY);
       console.log(`Number of cast hashes stored: ${castHashesCount}`);
 
-      if (castHashesCount > 100) {
+      if (castHashesCount > 3000) {
         const hash = await getOldestCastHash();
         if (hash) {
           await deleteCast(hash);
         }
       }
 
-      // Optionally, maintain only the last N hashes (e.g., last 1000)
-      await redis.ltrim(CAST_HASHES_KEY, 0, 100);
+      // Optionally, maintain only the last N hashes (e.g., last 3000)
+      await redis.ltrim(CAST_HASHES_KEY, 0, 3000);
     }
 
     console.log("Successfully posted to Farcaster:", message);
