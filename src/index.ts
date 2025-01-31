@@ -190,7 +190,7 @@ async function deleteCast(hash: string) {
       throw new Error(`HTTP error! status: ${response.status}`);
     }
 
-    console.log("Successfully deleted old cast", hash);
+    console.log("Successfully deleted old cast", response.data);
     return response.data;
   } catch (error) {
     console.error("Error deleting cast:", error);
