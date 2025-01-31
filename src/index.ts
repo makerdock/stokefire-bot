@@ -1,14 +1,14 @@
-import axios from 'axios';
-import { config } from 'dotenv';
-import { GraphQLClient } from 'graphql-request';
-import { gql } from 'graphql-tag';
-import Redis from 'ioredis';
+import axios from "axios";
+import { config } from "dotenv";
+import { GraphQLClient } from "graphql-request";
+import { gql } from "graphql-tag";
+import Redis from "ioredis";
 
 // Load environment variables
 config();
 
 if (!process.env.REDIS_URL) {
-  console.error('Please provide a REDIS_URL environment variable');
+  console.error("Please provide a REDIS_URL environment variable");
   process.exit(1);
 }
 
@@ -39,28 +39,28 @@ interface EventsResponse {
 }
 
 // Constants
-const LAST_PROCESSED_KEY = 'stokefire:last_processed_timestamp';
+const LAST_PROCESSED_KEY = "stokefire:last_processed_timestamp";
 const BATCH_SIZE = 50;
+const CAST_HASHES_KEY = "stokefire:cast_hashes";
 
 // GraphQL client setup
-const graphqlClient = new GraphQLClient('https://api.stokefire.xyz/graphql');
+const graphqlClient = new GraphQLClient("https://api.stokefire.xyz/graphql");
 
 // Neynar API setup
 const NEYNAR_API_KEY = process.env.NEYNAR_API_KEY;
-const NEYNAR_API_URL = 'https://api.neynar.com/v2/farcaster/cast';
+const NEYNAR_API_URL = "https://api.neynar.com/v2/farcaster/cast";
 
 // GraphQL query
 const EVENTS_QUERY = gql`
-   query GetEvents($timestamp: BigInt!, $limit: Int!) {
+  query GetEvents($timestamp: BigInt!, $limit: Int!) {
     events(
       limit: $limit
       orderBy: "eventTime"
       orderDirection: "desc"
-      where: { eventTime_gt: $timestamp,
-        OR: [
-          { eventType: "RevealBattle" },
-          { eventType: "AttackVillage" }
-        ] }
+      where: {
+        eventTime_gt: $timestamp
+        OR: [{ eventType: "RevealBattle" }, { eventType: "AttackVillage" }]
+      }
     ) {
       items {
         id
@@ -70,7 +70,7 @@ const EVENTS_QUERY = gql`
         player {
           username
           displayName
-        }       
+        }
       }
       pageInfo {
         hasNextPage
@@ -82,7 +82,9 @@ const EVENTS_QUERY = gql`
 
 // Get last processed timestamp
 async function getLastProcessedTimestamp(): Promise<string> {
-  const timestamp = await redis.get(LAST_PROCESSED_KEY);
+  let timestamp = await redis.get(LAST_PROCESSED_KEY);
+  const timestampNum = timestamp ? parseInt(timestamp) : 0;
+  timestamp = Math.max(1738361523, timestampNum).toString(); //start fresh from right now going forward
   // If no timestamp exists, start from current time minus 5 minutes
   if (!timestamp) {
     const fiveMinutesAgo = Math.floor(Date.now() / 1000) - 300;
@@ -97,6 +99,11 @@ async function updateLastProcessedTimestamp(timestamp: string): Promise<void> {
   await redis.set(LAST_PROCESSED_KEY, timestamp);
 }
 
+// Get oldest cast hash
+async function getOldestCastHash(): Promise<string | null> {
+  return redis.lindex(CAST_HASHES_KEY, -1);
+}
+
 // Format event message
 // Format event message
 function formatEventMessage(event: Event): string {
@@ -109,32 +116,85 @@ function formatEventMessage(event: Event): string {
 async function postToFarcaster(message: string) {
   try {
     if (!process.env.NEYNAR_SIGNER_UUID) {
-      console.error('Please provide a NEYNAR_SIGNER_UUID environment variable');
+      console.error("Please provide a NEYNAR_SIGNER_UUID environment variable");
       return;
     }
-    const response = await axios.post(NEYNAR_API_URL,
+    const response = await axios.post(
+      NEYNAR_API_URL,
       {
         signer_uuid: process.env.NEYNAR_SIGNER_UUID,
-        text: message
+        text: message,
       },
       {
         headers: {
-          'accept': 'application/json',
-          'api_key': NEYNAR_API_KEY,
-          'content-type': 'application/json'
-        }
+          accept: "application/json",
+          api_key: NEYNAR_API_KEY,
+          "content-type": "application/json",
+        },
       }
     );
 
     if (response.status !== 200) {
-      console.log("🚀 ~ postToFarcaster ~ data:", JSON.stringify(response.data))
+      console.log(
+        "🚀 ~ postToFarcaster ~ data:",
+        JSON.stringify(response.data)
+      );
       throw new Error(`HTTP error! status: ${response.status}`);
     }
 
-    console.log('Successfully posted to Farcaster:', message);
+    // Save the cast hash to Redis
+    if (response.data?.cast?.hash) {
+      await redis.lpush(CAST_HASHES_KEY, response.data.cast.hash);
+      const castHashesCount = await redis.llen(CAST_HASHES_KEY);
+      console.log(`Number of cast hashes stored: ${castHashesCount}`);
+
+      if (castHashesCount > 100) {
+        const hash = await getOldestCastHash();
+        if (hash) {
+          await deleteCast(hash);
+          console.log("deleted cast");
+        }
+      }
+
+      // Optionally, maintain only the last N hashes (e.g., last 1000)
+      await redis.ltrim(CAST_HASHES_KEY, 0, 100);
+    }
+
+    console.log("Successfully posted to Farcaster:", message);
     return response.data;
   } catch (error) {
-    console.error('Error posting to Farcaster:', error);
+    console.error("Error posting to Farcaster:", error);
+  }
+}
+
+async function deleteCast(hash: string) {
+  try {
+    if (!process.env.NEYNAR_SIGNER_UUID) {
+      console.error("Please provide a NEYNAR_SIGNER_UUID environment variable");
+      return;
+    }
+    const response = await axios.delete(NEYNAR_API_URL, {
+      headers: {
+        signer_uuid: process.env.NEYNAR_SIGNER_UUID,
+        accept: "application/json",
+        api_key: NEYNAR_API_KEY,
+        "content-type": "application/json",
+      },
+      data: {
+        target_hash: hash,
+        signer_uuid: process.env.NEYNAR_SIGNER_UUID,
+      },
+    });
+
+    if (response.status !== 200) {
+      console.log("😡 ~ DELETED CAST ~ data:", JSON.stringify(response.data));
+      throw new Error(`HTTP error! status: ${response.status}`);
+    }
+
+    console.log("Successfully deleted old cast");
+    return response.data;
+  } catch (error) {
+    console.error("Error posting to Farcaster:", error);
   }
 }
 
@@ -147,7 +207,7 @@ async function processEvents() {
 
     const response = await graphqlClient.request<EventsResponse>(EVENTS_QUERY, {
       timestamp: lastTimestamp,
-      limit: BATCH_SIZE
+      limit: BATCH_SIZE,
     });
 
     if (response.events?.items?.length > 0) {
@@ -162,30 +222,30 @@ async function processEvents() {
       }
     }
   } catch (error) {
-    console.error('Error processing events:', error);
+    console.error("Error processing events:", error);
     if (error instanceof Error) {
-      console.error('Error details:', error.message);
+      console.error("Error details:", error.message);
     }
   }
 }
 
 // Cleanup function
 async function cleanup() {
-  console.log('Cleaning up connections...');
+  console.log("Cleaning up connections...");
   await redis.quit();
   process.exit(0);
 }
 
 // Start polling
 async function startPolling() {
-  console.log('Connecting to Redis...');
+  console.log("Connecting to Redis...");
 
-  redis.on('error', (error) => {
-    console.error('Redis error:', error);
+  redis.on("error", (error) => {
+    console.error("Redis error:", error);
   });
 
-  redis.on('connect', () => {
-    console.log('Connected to Redis successfully');
+  redis.on("connect", () => {
+    console.log("Connected to Redis successfully");
   });
 
   // Initial startup
@@ -196,10 +256,10 @@ async function startPolling() {
 }
 
 // Error handling
-process.on('unhandledRejection', console.error);
-process.on('SIGINT', cleanup);
-process.on('SIGTERM', cleanup);
+process.on("unhandledRejection", console.error);
+process.on("SIGINT", cleanup);
+process.on("SIGTERM", cleanup);
 
 // Start the bot
-console.log('Starting Stokefire Farcaster bot...');
+console.log("Starting Stokefire Farcaster bot...");
 startPolling();
